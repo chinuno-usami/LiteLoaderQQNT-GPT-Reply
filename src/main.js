@@ -55,7 +55,32 @@ if (!fs.existsSync(settingsPath)) {
     }
 }
 
-const currentSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+function normalizeSettings(config) {
+    if (!config || typeof config !== "object") return {};
+    // 用户手填 / 粘贴时常带前后空格（例如 " qwen/xxx"），
+    // 这会被 OpenAI 兼容接口当成不同的 model 而直接 400，所以在读取时统一清洗。
+    for (const key of ["model", "openai_api_key", "openai_base_url"]) {
+        if (typeof config[key] === "string") config[key] = config[key].trim();
+    }
+    if (!config.model) config.model = defaultSettings.model;
+    return config;
+}
+
+// 首次读取时顺手修正磁盘上的脏数据
+(function fixSettingsFile() {
+    try {
+        const raw = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+        const fixed = normalizeSettings({ ...raw });
+        if (JSON.stringify(fixed) !== JSON.stringify(raw)) {
+            fs.writeFileSync(settingsPath, JSON.stringify(fixed, null, 4));
+            log("已修正设置文件中的前后空格 / 空 model");
+        }
+    } catch (error) {
+        log("[设置文件修正失败]", error);
+    }
+})();
+
+const currentSettings = normalizeSettings(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')));
 const apiKey = currentSettings.openai_api_key || process.env.OPENAI_API_KEY;
 const baseURL = currentSettings.openai_base_url || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
 
@@ -151,11 +176,10 @@ ipcMain.handle("LiteLoader.gpt_reply.checkOpenAI", (event, message) => {
 ipcMain.handle("LiteLoader.gpt_reply.getSettings", (event, message) => {
     try {
         const data = fs.readFileSync(settingsPath, "utf-8");
-        const config = JSON.parse(data);
-        return config;
+        return normalizeSettings(JSON.parse(data));
     } catch (error) {
         log(error);
-        return {};
+        return normalizeSettings({});
     }
 });
 
@@ -165,6 +189,7 @@ ipcMain.handle("LiteLoader.gpt_reply.getSettings", (event, message) => {
  */
 ipcMain.handle("LiteLoader.gpt_reply.setSettings", (event, content) => {
     try {
+        content = normalizeSettings(content);
         const new_config = JSON.stringify(content, null, 4);
         fs.writeFileSync(settingsPath, new_config, "utf-8");
         const apiKey = content.openai_api_key || process.env.OPENAI_API_KEY;
@@ -201,8 +226,11 @@ ipcMain.handle("LiteLoader.gpt_reply.logToMain", (event, ...args) => {
  */
 ipcMain.handle("LiteLoader.gpt_reply.getGPTReply", async (event, params) => {
     try {
-        const { system_message, prompt, model } = params;
+        const { system_message, prompt } = params;
+        const model = String(params.model ?? "").trim();
         let response;
+
+        if (!model) throw new Error("未设置模型（model 为空）");
 
         if (model.endsWith('-ddg')) {
             // Handle DuckDuckGo models
@@ -246,9 +274,15 @@ ipcMain.handle("LiteLoader.gpt_reply.getGPTReply", async (event, params) => {
  */
 ipcMain.handle("LiteLoader.gpt_reply.streamGPTReply", async (event, params) => {
     try {
-        const { system_message, prompt, model, request_id } = params;
+        const { system_message, prompt, request_id } = params;
+        const model = String(params.model ?? "").trim();
         let stream;
         let streamIdx = 0;
+
+        if (!model) throw new Error("未设置模型（model 为空）");
+        if (!openai && !model.endsWith("-ddg")) {
+            throw new Error("OpenAI 客户端未初始化，请检查 API Key / Base URL");
+        }
 
         const handleDuckAIStream = async (modelName) => {
             duckai = await initChat(modelName);

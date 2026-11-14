@@ -60,3 +60,13 @@
 
 -   [LiteLoaderQQNT](https://github.com/LiteLoaderQQNT/LiteLoaderQQNT/)
 -   UI 参考[LiteLoaderQQNT-DeepL](https://github.com/MUKAPP/LiteLoaderQQNT-DeepL/tree/main)
+
+## 兼容性说明（QQNT 9.9.22+）
+
+QQNT 9.9.22 起输入框由 CKEditor 换成 ProseMirror（`.qq-msg-editor`），旧版选择器 `.ck-editor` / `.ck-content` 已不存在。
+本版本改动：
+
+-   输入框 / 工具栏 / 消息列表改为多选择器兼容（新 `.qq-msg-editor`、`.func-bar-native`、`.chat-msg-area__vlist`，同时保留旧版）；
+-   回复面板改为按需创建并挂载到 `.chat-input-area`，不再依赖 `.ck-editor` 是否存在；
+-   右键菜单不再依赖 `#ml-root .ml-list`；
+-   设置中的模型名 / API Key / Base URL 会自动 `trim`，避免粘贴时带上空格导致接口 400。

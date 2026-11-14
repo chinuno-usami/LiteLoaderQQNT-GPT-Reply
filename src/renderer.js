@@ -7,6 +7,60 @@ let gptThinking = false;
 let messageEl;
 let appended = true;
 
+// QQNT 9.9.22+ 换掉了 CKEditor，输入框改成 ProseMirror(.qq-msg-editor)，
+// 旧版选择器全部失效，所以这里改成「多选择器 + 兜底」的方式。
+const SELECTORS = {
+  // 悬浮回复面板的挂载点（需要是定位容器）
+  responseAnchor: [".chat-input-area", ".chat-input-area__editor", ".ck-editor"],
+  // 输入框（新版 ProseMirror / 旧版 CKEditor）
+  editor: [".qq-msg-editor", ".ck.ck-content.ck-editor__editable", ".ck-content"],
+  // 输入框工具栏
+  funcBar: [
+    ".chat-func-bar .func-bar-native:first-child",
+    ".chat-func-bar > div:first-child",
+    ".chat-func-bar",
+  ],
+  // 消息列表（用于右键取消息）
+  messageList: [".chat-msg-area__vlist", "#ml-root .ml-list", ".ml-list"],
+  // 单条消息内容
+  messageContent: [".message-content", ".msg-content-container", ".message-native", ".file-message--content"],
+};
+
+/**
+ * 依次尝试多个选择器，返回第一个命中的元素
+ * @param {string[]} selectors
+ * @returns {HTMLElement|null}
+ */
+function pick(selectors) {
+  for (const selector of selectors) {
+    try {
+      const element = document.querySelector(selector);
+      if (element) return element;
+    } catch (_) {
+      // 忽略非法选择器
+    }
+  }
+  return null;
+}
+
+/**
+ * 读取输入框中的文本
+ * @returns {string}
+ */
+function getEditorText() {
+  const editor = pick(SELECTORS.editor);
+  return editor?.innerText?.trim() ?? "";
+}
+
+/**
+ * 设置回复区域的文本
+ * @param {string} text
+ */
+function setResponseText(text) {
+  const el = document.getElementById("response-text");
+  if (el) el.innerText = text;
+}
+
 // Utility Functions
 function log(...args) {
   console.log(`[GPT-Reply]`, ...args);
@@ -132,89 +186,126 @@ function createBarIcon(
  * @returns {HTMLElement} 消息内容容器元素
  */
 function getMessageElement(target) {
-  if (target.matches(".msg-content-container")) {
-    return target;
+  if (!(target instanceof HTMLElement)) return null;
+  if (target.matches(".msg-content-container")) return target;
+  const container = target.closest(".msg-content-container");
+  if (container) return container;
+  // 新版布局下部分消息（图片/文件/卡片）没有 .msg-content-container
+  return target.closest(".message") || target.closest(".ml-item");
+}
+
+/**
+ * 从消息元素中取出可读文本
+ * @param {HTMLElement} element
+ * @returns {string}
+ */
+function getMessageText(element) {
+  if (!element) return "";
+  for (const selector of SELECTORS.messageContent) {
+    const node = element.querySelector(selector);
+    const text = node?.innerText?.trim();
+    if (text) return text;
   }
-  return target.closest(".msg-content-container");
+  return element.innerText?.trim() ?? "";
 }
 
 /**
  * 处理右键GPT回复菜单
  */
 async function handleContextMenu() {
-  document
-      .querySelector("#ml-root .ml-list")
-      .addEventListener("mousedown", async (e) => {
-          if (e.button !== 2) {
-              appended = true;
-              return;
-          }
-          messageEl = getMessageElement(e.target);
-          appended = false;
-      });
+  // 不再依赖 "#ml-root .ml-list"（新版已不存在），直接监听 document，
+  // 用 e.target 回溯消息节点，兼容新旧布局。
+  if (window.__gpt_reply_context_menu_hooked__) return;
+  window.__gpt_reply_context_menu_hooked__ = true;
 
-      new MutationObserver(async () => {
-        if (appended) return;
-        const qContextMenu = document.querySelector(".q-context-menu");
-        if (qContextMenu && messageEl) {
-            const messageText = messageEl.querySelector(".message-content").innerText;
-            if (!messageText) return;
+  document.addEventListener(
+    "mousedown",
+    (e) => {
+      if (e.button !== 2) {
+        appended = true;
+        return;
+      }
+      messageEl = getMessageElement(e.target);
+      appended = false;
+    },
+    true
+  );
 
-            const settings = await gpt_reply.getSettings();
-            const firstMenuItem = document.querySelector(".q-context-menu .q-context-menu-item");
-            const separator = document.querySelector(".q-context-menu .q-context-menu-separator");
+  new MutationObserver(async () => {
+    if (appended) return;
+    const qContextMenu = document.querySelector(".q-context-menu");
+    if (!qContextMenu) return;
 
-            if (settings.preset_in_context === "on" && settings.system_message_presets?.length > 0) {
-              // Add menu items for each preset
-              settings.system_message_presets.forEach((preset) => {
-                  const menuItem = firstMenuItem.cloneNode(true);
-                  menuItem.querySelector("span").innerText = `GPT (${preset.name})`;
-                  fetchIcon(ICON_PATH, menuItem.querySelector(".q-icon"), "gpt-context-menu-icon");
-          
-                  // Create a closure with the preset message
-                  const presetMessage = preset.message;
-                  
-                  menuItem.addEventListener("click", () => {
-                      qContextMenu.style.display = "none";
-                      const responseText = document.getElementById("response-text");
-                      responseText.innerText = "GPT思考中...";
-                      
-                      // Show GPT response with the specific preset message
-                      showGPTResponse(messageText, presetMessage);
-                  });
-          
-                  qContextMenu.insertBefore(menuItem, separator);
-              });
-          } else {
-                // Original single GPT menu item
-                const menuItem = firstMenuItem.cloneNode(true);
-                menuItem.querySelector("span").innerText = "GPT";
-                fetchIcon(ICON_PATH, menuItem.querySelector(".q-icon"), "gpt-context-menu-icon");
-                const presetMessage = settings.system_message_presets[settings.selected_preset_index].message;
-                menuItem.addEventListener("click", () => {
-                    qContextMenu.style.display = "none";
-                    document.getElementById("response-text").innerText = "GPT思考中...";
-                    showGPTResponse(messageText, presetMessage);  
-                });
+    // 已经插入过就不再重复插入
+    if (qContextMenu.querySelector(".gpt-reply-context-item")) {
+      appended = true;
+      return;
+    }
 
-                qContextMenu.insertBefore(menuItem, separator);
-            }
-            appended = true;
-        }
-    }).observe(document.body, { childList: true });
+    const firstMenuItem = qContextMenu.querySelector(".q-context-menu-item");
+    const separator = qContextMenu.querySelector(".q-context-menu-separator");
+    if (!firstMenuItem || !separator) return;
+
+    const messageText = getMessageText(messageEl);
+    if (!messageText) return;
+
+    try {
+      const settings = (await gpt_reply.getSettings()) || {};
+      const presets = Array.isArray(settings.system_message_presets)
+        ? settings.system_message_presets
+        : [];
+
+      const addMenuItem = (label, systemMessage) => {
+        const menuItem = firstMenuItem.cloneNode(true);
+        menuItem.classList.add("gpt-reply-context-item");
+        const span = menuItem.querySelector("span");
+        if (span) span.innerText = label;
+        fetchIcon(ICON_PATH, menuItem.querySelector(".q-icon"), "gpt-context-menu-icon");
+        menuItem.addEventListener("click", () => {
+          qContextMenu.style.display = "none";
+          ensureResponseArea();
+          setResponseText("GPT思考中...");
+          showGPTResponse(messageText, systemMessage);
+        });
+        qContextMenu.insertBefore(menuItem, separator);
+      };
+
+      if (settings.preset_in_context === "on" && presets.length > 0) {
+        presets.forEach((preset) => addMenuItem(`GPT (${preset.name})`, preset.message));
+      } else {
+        const index = Number(settings.selected_preset_index ?? 0);
+        addMenuItem("GPT", presets[index]?.message ?? settings.system_message);
+      }
+      appended = true;
+    } catch (error) {
+      log("[右键菜单错误]", error);
+    }
+  }).observe(document.body, { childList: true });
 }
 /**
- * 聊天框GPT回复
+ * 注入样式（只注入一次）
  */
-async function initializeResponseArea() {
+function injectStyle() {
+  if (document.getElementById("gpt-reply-style")) return;
   const style = document.createElement("link");
+  style.id = "gpt-reply-style";
   style.rel = "stylesheet";
   style.href = `local:///${PLUGIN_PATH}/src/style.css`;
   document.head.appendChild(style);
+}
 
-  const gptResponse = document.createElement("div");
+/**
+ * 确保悬浮回复面板存在（惰性创建，不依赖任何旧版 DOM）
+ */
+function ensureResponseArea() {
+  injectStyle();
+
+  let gptResponse = document.getElementById("gpt-response");
+  if (gptResponse) return gptResponse;
+
+  gptResponse = document.createElement("div");
   gptResponse.id = "gpt-response";
-  gptResponse.zIndex = 999;
+  gptResponse.style.zIndex = 999;
   gptResponse.innerHTML = `
         <div class="response-bar">
             <div class="response-title">GPT回复</div>
@@ -226,65 +317,64 @@ async function initializeResponseArea() {
         <div id="response-text"></div>
     `;
 
-  const ckEditor = document.querySelector(".ck-editor");
-  ckEditor.appendChild(gptResponse);
+  // 优先挂到输入区（新旧版本都存在，且是定位容器）；
+  // 都没找到时用 fixed 定位兜底，保证功能可用。
+  const anchor = pick(SELECTORS.responseAnchor);
+  if (anchor) {
+    anchor.appendChild(gptResponse);
+  } else {
+    gptResponse.style.position = "fixed";
+    gptResponse.style.bottom = "160px";
+    gptResponse.style.left = "50%";
+    gptResponse.style.transform = "translateX(-50%)";
+    gptResponse.style.width = "min(680px, 80vw)";
+    document.body.appendChild(gptResponse);
+  }
 
-  const gptResponseText = document.querySelector("#response-text");
-  const actionButton = document.querySelector("#gpt-reply-action-button");
-  // actionButton.addEventListener("click", () => {
-  //     if (actionButton.innerText === "复制") {
-  //         console.log("复制")
-  //         navigator.clipboard.writeText(gptResponseText.innerText);
-  //     } else if (actionButton.innerText === "替换") {
-  //         console.log("替换")
-  //         const editor = document.querySelector(".ck-content");
-  //         console.log(editor.innerText);
-  //         console.log(gptResponseText.innerText);
-  //         editor.innerHTML = gptResponseText.innerText.split('\n').map(line => `<p>${line}</p>`).join('');
-  //         console.log(editor.innerHTML);
-  //     } else if (actionButton.innerText === "发送") {
-  //         console.log("发送");
-  //         const editor = document.querySelector(".ck-content");
-  //         editor.innerHTML = gptResponseText.innerText.split('\n').map(line => `<p>${line}</p>`).join('');
-
-  //         document.querySelector(".send-msg").click();
-  //     }
-
-  //     hideGPTResponse();
-  // });
-
-  actionButton.addEventListener("click", () => {
-    navigator.clipboard.writeText(gptResponseText.innerText);
-
+  gptResponse.querySelector("#gpt-reply-action-button").addEventListener("click", () => {
+    const text = document.querySelector("#response-text")?.innerText ?? "";
+    navigator.clipboard.writeText(text);
     hideGPTResponse();
   });
 
-  document
-    .querySelector("#gpt-reply-cancel-button")
-    .addEventListener("click", () => {
-      hideGPTResponse();
-    });
+  gptResponse.querySelector("#gpt-reply-cancel-button").addEventListener("click", () => {
+    hideGPTResponse();
+  });
 
-  observeElement(
-    ".chat-func-bar",
-    () => {
-      const iconBarLeft =
-        document.querySelector(".chat-func-bar").firstElementChild;
-      if (iconBarLeft.querySelector(".gpt-reply-bar-icon")) return;
+  return gptResponse;
+}
 
-      const baricon = createBarIcon(ICON_PATH, "GPT回复", () => {
-        if (gptThinking) return;
-        const text = document.querySelector(".ck-content").innerText.trim();
-        gptResponseText.innerText = text
-          ? "GPT思考中..."
-          : "请在聊天框中输入内容";
-        showGPTResponse(text);
-      });
+/**
+ * 聊天框工具栏图标
+ */
+function ensureBarIcon() {
+  const iconBar = pick(SELECTORS.funcBar) || document.querySelector(".chat-func-bar");
+  if (!iconBar || iconBar.querySelector(".gpt-reply-bar-icon")) return;
 
-      iconBarLeft.appendChild(baricon);
-    },
-    true
-  );
+  const baricon = createBarIcon(ICON_PATH, "GPT回复", () => {
+    if (gptThinking) return;
+    ensureResponseArea();
+    const text = getEditorText();
+    setResponseText(text ? "GPT思考中..." : "请在聊天框中输入内容");
+    showGPTResponse(text);
+  });
+
+  iconBar.appendChild(baricon);
+}
+
+/**
+ * 聊天框GPT回复初始化
+ */
+let responseAreaInitialized = false;
+async function initializeResponseArea() {
+  injectStyle();
+  ensureBarIcon();
+  if (responseAreaInitialized) return;
+  responseAreaInitialized = true;
+  // 工具栏会被会话切换重建，所以持续检测并补齐图标（只注册一次，避免定时器泄漏）
+  observeElement(".chat-func-bar", ensureBarIcon, true);
+  // 面板只在需要时创建，避免因编辑器重建导致功能失效
+  ensureResponseArea();
 }
 
 /**
@@ -292,36 +382,39 @@ async function initializeResponseArea() {
  * @param {string} text - 用户输入的文本
  */
 async function showGPTResponse(text, customSystemMessage = null) {
-  const settings = await gpt_reply.getSettings();
-  const actionButton = document.querySelector("#gpt-reply-action-button");
-  actionButton.innerText = "复制";
+  const settings = (await gpt_reply.getSettings()) || {};
 
-  const gptResponse = document.getElementById("gpt-response");
+  const gptResponse = ensureResponseArea();
+  const actionButton = gptResponse.querySelector("#gpt-reply-action-button");
+  if (actionButton) actionButton.innerText = "复制";
+
   gptResponse.style.display = "block";
-  gptResponse.animate(
-      [
-          { opacity: 0, transform: "translateY(20px)" },
-          { opacity: 1, transform: "translateY(0px)" },
-      ],
-      {
-          duration: 128,
-          easing: "ease-out",
-      }
-  );
+  if (typeof gptResponse.animate === "function") {
+    gptResponse.animate(
+        [
+            { opacity: 0, transform: "translateY(20px)" },
+            { opacity: 1, transform: "translateY(0px)" },
+        ],
+        {
+            duration: 128,
+            easing: "ease-out",
+        }
+    );
+  }
 
   if (!text) {
-      document.getElementById("response-text").innerText = "请在聊天框中输入内容";
+      setResponseText("请在聊天框中输入内容");
       return;
   }
 
   const openaiIsAvaliable = await gpt_reply.checkOpenAI();
   if (!openaiIsAvaliable) {
-      document.getElementById("response-text").innerText = "未设置 OpenAI API Key";
+      setResponseText("未设置 OpenAI API Key");
       return;
   }
 
   // Use the custom system message if provided
-  streamGPTResponse(text, "response-text", customSystemMessage);
+  streamGPTResponse(text, "response-text", customSystemMessage || settings.system_message);
 }
 
 /**
@@ -329,23 +422,31 @@ async function showGPTResponse(text, customSystemMessage = null) {
  */
 function hideGPTResponse() {
   const gptResponse = document.getElementById("gpt-response");
-  gptResponse.animate(
-    [
-      { opacity: 1, transform: "translateY(0px)" },
-      { opacity: 0, transform: "translateY(20px)" },
-    ],
-    {
-      duration: 128,
-      easing: "ease-in",
-    }
-  ).onfinish = () => {
+  if (!gptResponse) return;
+  const finish = () => {
     gptResponse.style.display = "none";
     gptThinking = false;
   };
+  if (typeof gptResponse.animate === "function") {
+    const animation = gptResponse.animate(
+      [
+        { opacity: 1, transform: "translateY(0px)" },
+        { opacity: 0, transform: "translateY(20px)" },
+      ],
+      {
+        duration: 128,
+        easing: "ease-in",
+      }
+    );
+    if (animation) animation.onfinish = finish;
+    else finish();
+  } else {
+    finish();
+  }
 }
 
-observeElement("#ml-root .ml-list", handleContextMenu);
-observeElement(".chat-input-area .ck-editor", initializeResponseArea);
+observeElement(".chat-func-bar", () => handleContextMenu());
+observeElement(".chat-func-bar", initializeResponseArea, true);
 
 /**
  * 设置窗口创建时的初始化
