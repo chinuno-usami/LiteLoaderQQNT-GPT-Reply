@@ -16,15 +16,17 @@ const SELECTORS = {
   editor: [".qq-msg-editor", ".ck.ck-content.ck-editor__editable", ".ck-content"],
   // 输入框工具栏（候选，按优先级；新版是 .func-bar-native 分组）
   funcBar: [
+    // 新版：.func-bar-native 分组
     ".chat-func-bar .func-bar-native",
-    ".chat-func-bar > div",
     ".chat-input-area .func-bar-native",
+    // 旧版：.func-bar 分组
+    ".chat-func-bar .func-bar",
     ".chat-input-area .func-bar",
-    ".func-bar-native",
     // 兜底：类名可能被追加后缀（如 .chat-func-bar__wrapper）
-    '[class*="chat-func-bar"]',
+    ".func-bar-native",
     '[class*="func-bar-native"]',
     ".chat-func-bar",
+    '[class*="chat-func-bar"]',
   ],
   // 消息列表（用于右键取消息）
   messageList: [".chat-msg-area__vlist", "#ml-root .ml-list", ".ml-list"],
@@ -370,13 +372,13 @@ function ensureResponseArea() {
   document.body.appendChild(gptResponse);
   positionResponseArea(gptResponse);
 
-  gptResponse.querySelector("#gpt-reply-action-button").addEventListener("click", () => {
+  gptResponse.querySelector("#gpt-reply-action-button")?.addEventListener("click", () => {
     const text = document.querySelector("#response-text")?.innerText ?? "";
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(text).catch?.(() => {});
     hideGPTResponse();
   });
 
-  gptResponse.querySelector("#gpt-reply-cancel-button").addEventListener("click", () => {
+  gptResponse.querySelector("#gpt-reply-cancel-button")?.addEventListener("click", () => {
     hideGPTResponse();
   });
 
@@ -395,9 +397,14 @@ function pickFuncBar() {
     } catch (error) {
       continue;
     }
-    // 跳过隐藏的分组（窄窗口下 QQ 会隐藏部分功能栏）
+    // 跳过隐藏的分组（窄窗口下 QQ 会隐藏部分功能栏），
+    // 也跳过真正的按钮节点（.bar-icon / .icon-item），否则图标会被塞进别人的按钮里
     const visible = elements.find(
-      (el) => !el.classList.contains("gpt-reply-bar-icon") && el.getClientRects().length > 0
+      (el) =>
+        el.getClientRects().length > 0 &&
+        !el.classList.contains("bar-icon") &&
+        !el.classList.contains("icon-item") &&
+        !el.classList.contains("gpt-reply-bar-icon")
     );
     if (visible) return visible;
   }
