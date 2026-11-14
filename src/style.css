@@ -1,35 +1,121 @@
-.response-title {
-    font-size: 16px;
-    margin-right: 16px;
-}
-
 /* GPT响应区域样式 */
 #gpt-response {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: auto;
-    background-color: var(--bg_bottom_light);
-    padding: 16px;
+    /* 挂到 body 上用 fixed 定位：不会被输入区裁剪，也不会超出窗口 */
+    position: fixed;
+    left: 16px;
+    bottom: 160px;
+    top: auto;
+    box-sizing: border-box;
     display: none;
+    flex-direction: column;
+    /* 具体宽高由 positionResponseArea() 按输入框位置计算 */
+    width: min(620px, calc(100vw - 32px));
+    min-width: 260px;
+    max-height: min(60vh, 520px);
+    padding: 12px 16px 14px;
     border-radius: 8px;
-    margin: 8px 16px;
+    background-color: var(--bg_bottom_standard, var(--bg_bottom_light, #ffffff));
     box-shadow: 0 4px 12px 0px #00000021;
     z-index: 9999;
-}
-
-#response-text {
-    font-size: 14px;
-    margin-top: 8px;
+    overflow: hidden;
 }
 
 .response-bar {
-    width: auto;
     display: flex;
-    text-align: right;
-    flex-direction: row;
-    justify-content: space-between;
+    flex: 0 0 auto;
     align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.response-title {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text_primary, inherit);
+}
+
+.response-buttons {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+}
+
+/* 不依赖 QQ 的 .q-button 样式，避免主题变量缺失时按钮变成“隐形” */
+#gpt-response .response-buttons button {
+    flex: 0 0 auto;
+    height: 26px;
+    padding: 0 14px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 24px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: filter 0.15s ease;
+}
+
+#gpt-response #gpt-reply-action-button {
+    background-color: var(--brand_standard, #0091ff);
+    border-color: var(--brand_standard, #0091ff);
+    color: #ffffff;
+}
+
+#gpt-response #gpt-reply-cancel-button {
+    background-color: transparent;
+    border-color: var(--border_secondary, rgba(128, 128, 128, 0.45));
+    color: var(--text_primary, #333333);
+}
+
+#gpt-response .response-buttons button:hover {
+    filter: brightness(1.08);
+}
+
+#gpt-response .response-buttons button:active {
+    filter: brightness(0.94);
+}
+
+/* 回复内容：超出面板高度时出现滚动条 */
+#response-text {
+    flex: 1 1 auto;
+    min-height: 40px;
+    margin-top: 8px;
+    padding-right: 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--text_primary, inherit);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    /* QQ 默认禁用了文本选中，这里允许选中回复内容 */
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+#response-text::-webkit-scrollbar {
+    width: 6px;
+}
+
+#response-text::-webkit-scrollbar-thumb {
+    background-color: var(--border_secondary, rgba(128, 128, 128, 0.4));
+    border-radius: 3px;
+}
+
+#response-text::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* 深色主题下的兜底配色 */
+body[q-theme="dark"] #gpt-response {
+    background-color: var(--bg_bottom_standard, #2b2b2b);
+}
+
+body[q-theme="dark"] #gpt-response #gpt-reply-cancel-button {
+    color: var(--text_primary, #dddddd);
+    border-color: var(--border_secondary, rgba(200, 200, 200, 0.35));
 }
 
 /* 聊天框工具栏样式 */

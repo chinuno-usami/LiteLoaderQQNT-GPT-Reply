@@ -66,8 +66,11 @@ contextBridge.exposeInMainWorld("gpt_reply", {
                 if (streamElement) {
                     if (chunkIdx === 0) {
                         streamElement.innerText = "";
+                        streamElement.scrollTop = 0;
                     }
                     streamElement.innerText += chunkContent;
+                    // 流式输出时跟随到底部（面板内容超出高度时可滚动）
+                    streamElement.scrollTop = streamElement.scrollHeight;
                 }
             }
         );

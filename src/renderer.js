@@ -58,7 +58,10 @@ function getEditorText() {
  */
 function setResponseText(text) {
   const el = document.getElementById("response-text");
-  if (el) el.innerText = text;
+  if (!el) return;
+  el.innerText = text;
+  // 新一轮回复时把滚动条拉回顶部
+  el.scrollTop = 0;
 }
 
 // Utility Functions
@@ -295,6 +298,38 @@ function injectStyle() {
 }
 
 /**
+ * 把回复面板定位到输入框上方，并限制在窗口内
+ * @param {HTMLElement} panel
+ */
+function positionResponseArea(panel) {
+  const margin = 16;
+  const width = Math.max(260, Math.min(620, window.innerWidth - margin * 2));
+  panel.style.width = `${width}px`;
+  panel.style.top = "auto";
+
+  const anchor = pick(SELECTORS.responseAnchor);
+  const rect = anchor?.getBoundingClientRect();
+  const innerHeight = window.innerHeight || 800;
+  const innerWidth = window.innerWidth || 1200;
+
+  if (rect && rect.top > 120) {
+    // 面板底部贴在输入框上方 8px，向上生长
+    const left = Math.min(
+      Math.max(margin, rect.left + margin),
+      Math.max(margin, innerWidth - width - margin)
+    );
+    panel.style.left = `${left}px`;
+    panel.style.bottom = `${innerHeight - rect.top + 8}px`;
+    panel.style.maxHeight = `${Math.min(520, Math.max(180, rect.top - 32))}px`;
+  } else {
+    // 输入框位置拿不到时兜底：底部居中
+    panel.style.left = `${Math.max(margin, (innerWidth - width) / 2)}px`;
+    panel.style.bottom = "160px";
+    panel.style.maxHeight = `${Math.min(520, Math.max(180, innerHeight - 240))}px`;
+  }
+}
+
+/**
  * 确保悬浮回复面板存在（惰性创建，不依赖任何旧版 DOM）
  */
 function ensureResponseArea() {
@@ -305,7 +340,6 @@ function ensureResponseArea() {
 
   gptResponse = document.createElement("div");
   gptResponse.id = "gpt-response";
-  gptResponse.style.zIndex = 999;
   gptResponse.innerHTML = `
         <div class="response-bar">
             <div class="response-title">GPT回复</div>
@@ -317,19 +351,10 @@ function ensureResponseArea() {
         <div id="response-text"></div>
     `;
 
-  // 优先挂到输入区（新旧版本都存在，且是定位容器）；
-  // 都没找到时用 fixed 定位兜底，保证功能可用。
-  const anchor = pick(SELECTORS.responseAnchor);
-  if (anchor) {
-    anchor.appendChild(gptResponse);
-  } else {
-    gptResponse.style.position = "fixed";
-    gptResponse.style.bottom = "160px";
-    gptResponse.style.left = "50%";
-    gptResponse.style.transform = "translateX(-50%)";
-    gptResponse.style.width = "min(680px, 80vw)";
-    document.body.appendChild(gptResponse);
-  }
+  // 挂到 body 上并用 fixed 定位：不会被 .chat-input-area 裁剪，
+  // 具体位置在显示时由 positionResponseArea() 按输入框位置计算。
+  document.body.appendChild(gptResponse);
+  positionResponseArea(gptResponse);
 
   gptResponse.querySelector("#gpt-reply-action-button").addEventListener("click", () => {
     const text = document.querySelector("#response-text")?.innerText ?? "";
@@ -388,7 +413,10 @@ async function showGPTResponse(text, customSystemMessage = null) {
   const actionButton = gptResponse.querySelector("#gpt-reply-action-button");
   if (actionButton) actionButton.innerText = "复制";
 
-  gptResponse.style.display = "block";
+  // 位置随窗口/输入框变化，每次显示前重新计算
+  positionResponseArea(gptResponse);
+  // CSS 里是 flex 布局（标题栏固定 + 内容区滚动），所以这里必须用 flex
+  gptResponse.style.display = "flex";
   if (typeof gptResponse.animate === "function") {
     gptResponse.animate(
         [
@@ -444,6 +472,13 @@ function hideGPTResponse() {
     finish();
   }
 }
+
+window.addEventListener("resize", () => {
+  const panel = document.getElementById("gpt-response");
+  if (panel && panel.style.display === "flex") {
+    positionResponseArea(panel);
+  }
+});
 
 observeElement(".chat-func-bar", () => handleContextMenu());
 observeElement(".chat-func-bar", initializeResponseArea, true);
