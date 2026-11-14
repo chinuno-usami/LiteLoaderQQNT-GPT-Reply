@@ -14,10 +14,16 @@ const SELECTORS = {
   responseAnchor: [".chat-input-area", ".chat-input-area__editor", ".ck-editor"],
   // 输入框（新版 ProseMirror / 旧版 CKEditor）
   editor: [".qq-msg-editor", ".ck.ck-content.ck-editor__editable", ".ck-content"],
-  // 输入框工具栏
+  // 输入框工具栏（候选，按优先级；新版是 .func-bar-native 分组）
   funcBar: [
-    ".chat-func-bar .func-bar-native:first-child",
-    ".chat-func-bar > div:first-child",
+    ".chat-func-bar .func-bar-native",
+    ".chat-func-bar > div",
+    ".chat-input-area .func-bar-native",
+    ".chat-input-area .func-bar",
+    ".func-bar-native",
+    // 兜底：类名可能被追加后缀（如 .chat-func-bar__wrapper）
+    '[class*="chat-func-bar"]',
+    '[class*="func-bar-native"]',
     ".chat-func-bar",
   ],
   // 消息列表（用于右键取消息）
@@ -76,13 +82,19 @@ function log(...args) {
  * @param {string} [id=null] - 可选，设置到图标的ID
  */
 function fetchIcon(iconPath, element, id = null) {
+  if (!element) return;
   fetch(`local:///${PLUGIN_PATH}/${iconPath}`)
     .then((response) => response.text())
     .then((data) => {
       element.innerHTML = data;
-      if (id) {
-        element.querySelector("svg").id = id;
-      }
+      const svg = element.querySelector("svg");
+      if (svg && id) svg.id = id;
+      if (!svg) element.textContent = "GPT";
+    })
+    .catch((error) => {
+      // 图标资源加载失败时退化为文字，避免出现“看不见的按钮”
+      log("[图标加载失败]", iconPath, error);
+      element.textContent = "GPT";
     });
 }
 
@@ -289,6 +301,7 @@ async function handleContextMenu() {
  * 注入样式（只注入一次）
  */
 function injectStyle() {
+  if (!document.head) return;
   if (document.getElementById("gpt-reply-style")) return;
   const style = document.createElement("link");
   style.id = "gpt-reply-style";
@@ -333,6 +346,7 @@ function positionResponseArea(panel) {
  * 确保悬浮回复面板存在（惰性创建，不依赖任何旧版 DOM）
  */
 function ensureResponseArea() {
+  if (!document.body) return null;
   injectStyle();
 
   let gptResponse = document.getElementById("gpt-response");
@@ -370,11 +384,34 @@ function ensureResponseArea() {
 }
 
 /**
- * 聊天框工具栏图标
+ * 找到输入框功能栏里真正可见的容器
+ * @returns {HTMLElement|null}
+ */
+function pickFuncBar() {
+  for (const selector of SELECTORS.funcBar) {
+    let elements = [];
+    try {
+      elements = Array.from(document.querySelectorAll(selector));
+    } catch (error) {
+      continue;
+    }
+    // 跳过隐藏的分组（窄窗口下 QQ 会隐藏部分功能栏）
+    const visible = elements.find(
+      (el) => !el.classList.contains("gpt-reply-bar-icon") && el.getClientRects().length > 0
+    );
+    if (visible) return visible;
+  }
+  return null;
+}
+
+/**
+ * 聊天框工具栏图标（可重复调用，已存在则跳过）
+ * @returns {boolean} 是否已存在/已插入
  */
 function ensureBarIcon() {
-  const iconBar = pick(SELECTORS.funcBar) || document.querySelector(".chat-func-bar");
-  if (!iconBar || iconBar.querySelector(".gpt-reply-bar-icon")) return;
+  const iconBar = pickFuncBar();
+  if (!iconBar) return false;
+  if (iconBar.querySelector(".gpt-reply-bar-icon")) return true;
 
   const baricon = createBarIcon(ICON_PATH, "GPT回复", () => {
     if (gptThinking) return;
@@ -383,8 +420,43 @@ function ensureBarIcon() {
     setResponseText(text ? "GPT思考中..." : "请在聊天框中输入内容");
     showGPTResponse(text);
   });
+  baricon.title = "GPT回复";
 
   iconBar.appendChild(baricon);
+  log("[工具栏] 已注入 GPT 回复图标");
+  return true;
+}
+
+let barWatchTimer = null;
+let barWatchWarned = false;
+/**
+ * 持续补齐工具栏图标
+ * QQ 的 Vue 会在切换会话/重绘功能栏时把外部插入的节点冲掉，
+ * 所以这里用轮询兜底（500ms 一次，开销可忽略）。
+ */
+function watchFuncBarIcon() {
+  if (barWatchTimer) return;
+  const startAt = Date.now();
+  const tick = () => {
+    let ok = false;
+    try {
+      ok = ensureBarIcon();
+    } catch (error) {
+      log("[工具栏] 注入图标失败", error);
+    }
+    if (!ok && !barWatchWarned && Date.now() - startAt > 20000) {
+      barWatchWarned = true;
+      log("[工具栏] 20s 内没找到输入框功能栏，诊断信息：", {
+        chatFuncBar: document.querySelectorAll(".chat-func-bar").length,
+        funcBarNative: document.querySelectorAll(".func-bar-native").length,
+        funcBar: document.querySelectorAll(".func-bar").length,
+        chatInputArea: document.querySelectorAll(".chat-input-area").length,
+        editor: document.querySelectorAll(SELECTORS.editor.join(",")).length,
+      });
+    }
+  };
+  tick();
+  barWatchTimer = setInterval(tick, 500);
 }
 
 /**
@@ -393,11 +465,9 @@ function ensureBarIcon() {
 let responseAreaInitialized = false;
 async function initializeResponseArea() {
   injectStyle();
-  ensureBarIcon();
+  watchFuncBarIcon();
   if (responseAreaInitialized) return;
   responseAreaInitialized = true;
-  // 工具栏会被会话切换重建，所以持续检测并补齐图标（只注册一次，避免定时器泄漏）
-  observeElement(".chat-func-bar", ensureBarIcon, true);
   // 面板只在需要时创建，避免因编辑器重建导致功能失效
   ensureResponseArea();
 }
@@ -410,6 +480,7 @@ async function showGPTResponse(text, customSystemMessage = null) {
   const settings = (await gpt_reply.getSettings()) || {};
 
   const gptResponse = ensureResponseArea();
+  if (!gptResponse) return;
   const actionButton = gptResponse.querySelector("#gpt-reply-action-button");
   if (actionButton) actionButton.innerText = "复制";
 
@@ -478,6 +549,26 @@ window.addEventListener("resize", () => {
   if (panel && panel.style.display === "flex") {
     positionResponseArea(panel);
   }
+});
+
+/**
+ * DOM 就绪后再做需要 body/head 的初始化
+ * @param {Function} callback
+ */
+function onDomReady(callback) {
+  if (document.body && document.head) return callback();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", callback, { once: true });
+  } else {
+    setTimeout(callback, 0);
+  }
+}
+
+// 不依赖 .chat-func-bar 是否已出现：模块加载即开始补图标，避免工具栏晚于注入时丢失
+watchFuncBarIcon();
+onDomReady(() => {
+  injectStyle();
+  ensureResponseArea();
 });
 
 observeElement(".chat-func-bar", () => handleContextMenu());
